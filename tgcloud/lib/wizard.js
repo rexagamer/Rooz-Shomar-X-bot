@@ -2,21 +2,37 @@ import { SUPPORTED_YEAR_MIN, SUPPORTED_YEAR_MAX, getDaysInJalaliMonth } from './
 import { parseIntegerInput, parseMonthInput, parseTitleInput } from './input-parsers.js';
 import { getState, setState, clearState } from './state-service.js';
 import { createEntry, updateEntry, getEntry } from './date-service.js';
+import { getSettings } from './settings-service.js';
 import { T, formatEntryBlock } from './formatters.js';
-import { confirmKeyboard, editMenuKeyboard } from './keyboards.js';
-import { render, send, showDashboard, todayOf } from './screens.js';
+import {
+  confirmKeyboard, editMenuKeyboard, wizardYearKeyboard, wizardMonthKeyboard,
+  wizardTitleKeyboard, TITLE_SUGGESTIONS,
+} from './keyboards.js';
+import { render, send, showDashboard, showDateList, todayOf } from './screens.js';
 
-// Each flow lists the step that follows each step. State name = `w_${step}`.
 const FLOWS = {
   add: { first: 'year', next: { year: 'month', month: 'day', day: 'title', title: 'confirm' } },
   edit_date: { first: 'year', next: { year: 'month', month: 'day', day: 'confirm' } },
   edit_title: { first: 'title', next: { title: 'confirm' } },
 };
 
+function promptKeyboard(step, payload) {
+  if (step === 'year') {
+    const today = todayOf({ now: Date.now() }); // fallback; usually overridden
+    return wizardYearKeyboard(payload?._currentYear ?? 1404);
+  }
+  if (step === 'month') return wizardMonthKeyboard();
+  if (step === 'title') return wizardTitleKeyboard();
+  return undefined;
+}
+
 export async function startWizard(c, kind, base = {}) {
   const { first } = FLOWS[kind];
-  await setState(c.deps.store, c.userId, `w_${first}`, { kind, ...base }, c.deps.now);
-  await send(c, T.prompts[first]);
+  const today = todayOf(c.deps);
+  const payload = { kind, _currentYear: today.year, ...base };
+  await setState(c.deps.store, c.userId, `w_${first}`, payload, c.deps.now);
+  const kb = promptKeyboard(first, payload);
+  await send(c, T.prompts[first], kb);
 }
 
 async function sendConfirm(c, p) {
@@ -30,7 +46,45 @@ async function advance(c, step, p) {
   const next = FLOWS[p.kind].next[step];
   await setState(c.deps.store, c.userId, `w_${next}`, p, c.deps.now);
   if (next === 'confirm') await sendConfirm(c, p);
-  else await send(c, T.prompts[next]);
+  else {
+    const kb = promptKeyboard(next, p);
+    await send(c, T.prompts[next], kb);
+  }
+}
+
+/** Handle year button callback */
+export async function handleWizardYearButton(c, yearStr) {
+  const st = await getState(c.deps.store, c.userId, c.deps.now);
+  if (!st || st.state !== 'w_year') return T.expired;
+  const y = Number(yearStr);
+  if (y < SUPPORTED_YEAR_MIN || y > SUPPORTED_YEAR_MAX) return T.badYear;
+  const p = { ...st.payload, year: y };
+  await advance(c, 'year', p);
+  return undefined;
+}
+
+/** Handle month button callback */
+export async function handleWizardMonthButton(c, monthNum) {
+  const st = await getState(c.deps.store, c.userId, c.deps.now);
+  if (!st || st.state !== 'w_month') return T.expired;
+  const p = { ...st.payload, month: monthNum };
+  await advance(c, 'month', p);
+  return undefined;
+}
+
+/** Handle title suggestion button callback */
+export async function handleWizardTitleButton(c, suggestionIndex) {
+  const st = await getState(c.deps.store, c.userId, c.deps.now);
+  if (!st || st.state !== 'w_title') return T.expired;
+  const title = TITLE_SUGGESTIONS[suggestionIndex];
+  if (title === null) {
+    // "custom" button: just tell the user to type
+    await send(c, 'عنوان دلخواهت رو بنویس:');
+    return undefined;
+  }
+  const p = { ...st.payload, title };
+  await advance(c, 'title', p);
+  return undefined;
 }
 
 /** Handles a free-text message while a wizard state is active. */
@@ -68,7 +122,7 @@ export async function handleWizardText(c, st, text) {
       p.title = t;
       break;
     }
-    default: // 'confirm': text isn't an answer here; re-show the buttons
+    default:
       return sendConfirm(c, p);
   }
   return advance(c, step, p);
@@ -90,7 +144,10 @@ export async function confirmWizard(c) {
     return undefined;
   }
   const todayIso = todayOf(c.deps).gregorianDate;
-  await render(c, c.messageId, p.kind === 'add' ? T.saved(result.entry, todayIso) : T.updated(result.entry, todayIso));
+  const settings = await getSettings(store, c.userId);
+  await render(c, c.messageId, p.kind === 'add'
+    ? T.saved(result.entry, todayIso, settings.displayMode)
+    : T.updated(result.entry, todayIso, settings.displayMode));
   await showDashboard(c);
   return undefined;
 }
@@ -100,9 +157,10 @@ export async function confirmWizard(c) {
 export async function openEditMenu(c, id) {
   const entry = await getEntry(c.deps.store, c.userId, id);
   if (!entry) return T.notFound;
+  const settings = await getSettings(c.deps.store, c.userId);
   await render(
     c, c.messageId,
-    `${formatEntryBlock(entry, todayOf(c.deps).gregorianDate)}\n\n${T.editWhat}`,
+    `${formatEntryBlock(entry, todayOf(c.deps).gregorianDate, settings.displayMode)}\n\n${T.editWhat}`,
     editMenuKeyboard(id),
   );
   return undefined;
@@ -114,7 +172,7 @@ export async function beginEdit(c, id, kind) {
   const base = kind === 'edit_title'
     ? { id, year: entry.jalaliYear, month: entry.jalaliMonth, day: entry.jalaliDay }
     : { id, title: entry.title };
-  await render(c, c.messageId, T.editing(entry)); // also removes the old buttons
+  await render(c, c.messageId, T.editing(entry));
   await startWizard(c, kind, base);
   return undefined;
 }

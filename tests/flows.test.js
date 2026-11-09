@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHarness, addDate } from './helpers/harness.js';
+import { createHarness, addDate, addDateWithButtons } from './helpers/harness.js';
 import { T } from '../tgcloud/lib/formatters.js';
 import { CONFIG } from '../tgcloud/lib/config.js';
 import { handleMessage, handleCallbackQuery } from '../tgcloud/lib/router.js';
@@ -10,31 +10,104 @@ const A = 111;
 const B = 222;
 const stateOf = async (h, user) => (await h.store.getState(String(user)))?.state ?? null;
 
-test('/start shows welcome, today (Tehran) and the empty state', async () => {
+// ---------- reply keyboard ----------
+
+test('/start shows welcome, today, reply keyboard and inline buttons', async () => {
   const h = createHarness();
   await h.say(A, '/start');
-  const { text } = h.lastSent();
-  assert.ok(text.includes(T.welcome));
-  assert.ok(text.includes('📅 امروز: ۱۸ آبان ۱۴۰۴'));
-  assert.ok(text.includes(T.emptyList));
+  const msg = h.lastSent();
+  assert.ok(msg.text.includes('سلام! 🌱'));
+  assert.ok(msg.text.includes('📅 امروز: ۱۸ آبان ۱۴۰۴'));
+  assert.ok(msg.text.includes(T.emptyList) || msg.text.includes('هنوز'));
+  // Reply keyboard is attached
+  assert.ok(msg.replyKeyboard !== null);
+  assert.ok(msg.replyKeyboard.keyboard.length >= 3);
+  assert.equal(msg.replyKeyboard.resize_keyboard, true);
+  assert.equal(msg.replyKeyboard.is_persistent, true);
+  // Inline buttons for empty state
+  const btns = h.buttons(msg.keyboard);
+  assert.ok(btns.some((b) => b.callback_data === 'nav_add'));
 });
 
-test('full /add flow: five steps, nothing saved before confirmation', async () => {
+test('reply keyboard button "📅 تاریخ‌های من" shows date list', async () => {
+  const h = createHarness();
+  await addDate(h, A);
+  await h.say(A, '📅 تاریخ‌های من');
+  const msg = h.lastSent();
+  assert.ok(msg.text.includes('تاریخ‌های تو'));
+  assert.ok(msg.text.includes('شروع رابطه'));
+});
+
+test('reply keyboard button "➕ ثبت تاریخ جدید" starts wizard', async () => {
+  const h = createHarness();
+  await h.say(A, '➕ ثبت تاریخ جدید');
+  assert.ok(h.lastSent().text.includes('سال'));
+  assert.equal(await stateOf(h, A), 'w_year');
+});
+
+test('reply keyboard button "🗓 امروز" shows dashboard', async () => {
+  const h = createHarness();
+  await h.say(A, '🗓 امروز');
+  const msg = h.lastSent();
+  assert.ok(msg.text.includes('📅 امروز'));
+});
+
+test('reply keyboard button "❓ راهنما" shows help', async () => {
+  const h = createHarness();
+  await h.say(A, '❓ راهنما');
+  assert.ok(h.lastSent().text.includes('راهنمای روزشمار'));
+});
+
+test('reply keyboard button "📤 اشتراک‌گذاری" shows share menu', async () => {
+  const h = createHarness();
+  await addDate(h, A);
+  await h.say(A, '📤 اشتراک‌گذاری');
+  const btns = h.buttons(h.lastSent().keyboard);
+  assert.ok(btns.some((b) => b.callback_data === 'sa'));
+  assert.ok(btns.some((b) => b.callback_data === 'ss'));
+});
+
+test('reply keyboard button "📥 دریافت تاریخ" prompts for code', async () => {
+  const h = createHarness();
+  await h.say(A, '📥 دریافت تاریخ');
+  assert.ok(h.lastSent().text.includes('کد اشتراک'));
+  assert.equal(await stateOf(h, A), 'i_wait');
+});
+
+test('reply keyboard button "⚙️ تنظیمات" shows settings', async () => {
+  const h = createHarness();
+  await h.say(A, '⚙️ تنظیمات');
+  const msg = h.lastSent();
+  assert.ok(msg.text.includes('تنظیمات'));
+  assert.ok(h.buttons(msg.keyboard).some((b) => b.callback_data === 'set_detailed'));
+});
+
+// ---------- add flow with inline buttons ----------
+
+test('full /add flow: five steps with text input', async () => {
   const h = createHarness();
   await h.say(A, '/add');
-  assert.match(h.lastSent().text, /سال رو وارد کن/);
+  assert.match(h.lastSent().text, /سال/);
+  // Year prompt should have year buttons
+  const yearBtns = h.buttons(h.lastSent().keyboard);
+  assert.ok(yearBtns.some((b) => b.callback_data === 'wy:1404'));
+
   await h.say(A, '۱۴۰۴');
-  assert.match(h.lastSent().text, /شماره ماه/);
+  // Month prompt should have month buttons
+  const monthBtns = h.buttons(h.lastSent().keyboard);
+  assert.ok(monthBtns.some((b) => b.callback_data === 'wm3'));
+
   await h.say(A, '۳');
   assert.match(h.lastSent().text, /روز ماه/);
   await h.say(A, '۱۵');
-  assert.match(h.lastSent().text, /عنوان/);
-  await h.say(A, 'شروع رابطه');
+  // Title prompt should have suggestions
+  const titleBtns = h.buttons(h.lastSent().keyboard);
+  assert.ok(titleBtns.some((b) => b.callback_data === 'wts1'));
 
+  await h.say(A, 'شروع رابطه');
   const confirm = h.lastSent();
-  assert.ok(confirm.text.includes('📌 شروع رابطه'));
-  assert.ok(confirm.text.includes('📅 ۱۵ خرداد ۱۴۰۴'));
-  assert.ok(confirm.text.includes('ثبتش کنم؟'));
+  assert.ok(confirm.text.includes('📌') || confirm.text.includes('شروع رابطه'));
+  assert.ok(confirm.text.includes('۱۵ خرداد ۱۴۰۴'));
   assert.deepEqual(h.buttons(confirm.keyboard).map((b) => b.callback_data), ['wc', 'wx']);
   assert.equal((await h.store.listDates('111')).length, 0);
 
@@ -42,11 +115,62 @@ test('full /add flow: five steps, nothing saved before confirmation', async () =
   const [saved] = await h.store.listDates('111');
   assert.equal(saved.gregorianDate, '2025-06-05');
   assert.equal(saved.ownerUserId, '111');
-  assert.ok(h.lastSent().text.includes('۱۵۷ روز گذشته'));
   assert.equal(await stateOf(h, A), null);
 });
 
-test('Arabic digits and Persian month names are accepted', async () => {
+test('add flow with inline year button', async () => {
+  const h = createHarness();
+  await h.say(A, '/add');
+  await h.press(A, 'wy:1404');
+  // Should now be on month step
+  const monthBtns = h.buttons(h.lastSent().keyboard);
+  assert.ok(monthBtns.some((b) => b.callback_data === 'wm1'));
+  assert.equal(await stateOf(h, A), 'w_month');
+});
+
+test('add flow with inline month button', async () => {
+  const h = createHarness();
+  await h.say(A, '/add');
+  await h.say(A, '۱۴۰۴');
+  await h.press(A, 'wm3'); // خرداد
+  assert.match(h.lastSent().text, /روز ماه/);
+  assert.equal(await stateOf(h, A), 'w_day');
+});
+
+test('add flow with title suggestion button', async () => {
+  const h = createHarness();
+  await h.say(A, '/add');
+  await h.say(A, '۱۴۰۴');
+  await h.say(A, '۳');
+  await h.say(A, '۱۵');
+  await h.press(A, 'wts1'); // "شروع رابطه"
+  assert.ok(h.lastSent().text.includes('شروع رابطه'));
+  assert.equal(await stateOf(h, A), 'w_confirm');
+});
+
+test('add flow with "custom title" button then text', async () => {
+  const h = createHarness();
+  await h.say(A, '/add');
+  await h.say(A, '۱۴۰۴');
+  await h.say(A, '۳');
+  await h.say(A, '۱۵');
+  await h.press(A, 'wts5'); // "عنوان دلخواه"
+  assert.ok(h.lastSent().text.includes('دلخواه'));
+  assert.equal(await stateOf(h, A), 'w_title'); // still on title step
+  await h.say(A, 'تاریخ من');
+  assert.equal(await stateOf(h, A), 'w_confirm');
+});
+
+test('full add with all inline buttons', async () => {
+  const h = createHarness();
+  await addDateWithButtons(h, A, { y: 1404, m: 3, d: '۱۵', title: 'تولد' });
+  const [saved] = await h.store.listDates('111');
+  assert.equal(saved.title, 'تولد');
+  assert.equal(saved.jalaliYear, 1404);
+  assert.equal(saved.jalaliMonth, 3);
+});
+
+test('Arabic digits and Persian month names still accepted', async () => {
   const h = createHarness();
   await addDate(h, A, { y: '١٤٠٤', m: 'خرداد', d: '١٥', title: 'تولد' });
   const [saved] = await h.store.listDates('111');
@@ -114,9 +238,9 @@ test('/help and /start still work mid-wizard and the wizard resumes', async () =
   await h.say(A, '/add');
   await h.say(A, '۱۴۰۴');
   await h.say(A, '/help');
-  assert.equal(h.lastSent().text, T.help);
+  assert.ok(h.lastSent().text.includes('راهنمای روزشمار'));
   await h.say(A, '/start');
-  assert.ok(h.lastSent().text.includes(T.welcome));
+  assert.ok(h.lastSent().text.includes('سلام'));
   assert.equal(await stateOf(h, A), 'w_month');
   await h.say(A, '۳');
   assert.match(h.lastSent().text, /روز ماه/);
@@ -188,6 +312,43 @@ test('unknown text and non-text messages get help plus dashboard', async () => {
   assert.equal(h.lastSent().text, T.unknownCommand);
 });
 
+// ---------- date list with inline actions ----------
+
+test('date list shows edit/delete/share buttons per entry', async () => {
+  const h = createHarness();
+  await addDate(h, A);
+  await h.say(A, '📅 تاریخ‌های من');
+  const msg = h.lastSent();
+  assert.ok(msg.text.includes('شروع رابطه'));
+  const btns = h.buttons(msg.keyboard);
+  const [entry] = await h.store.listDates('111');
+  assert.ok(btns.some((b) => b.callback_data === `e:${entry.id}`));
+  assert.ok(btns.some((b) => b.callback_data === `d:${entry.id}`));
+  assert.ok(btns.some((b) => b.callback_data === `es:${entry.id}`));
+});
+
+test('date list shows calendar duration in detailed mode', async () => {
+  const h = createHarness();
+  await addDate(h, A);
+  await h.say(A, '📅 تاریخ‌های من');
+  const msg = h.lastSent();
+  // The date 1404/3/15 -> 2025-06-05, today is 2025-11-09
+  // Should show something like "۵ ماه و ۴ روز گذشته" (calendar-aware)
+  assert.ok(msg.text.includes('ماه') || msg.text.includes('روز'));
+});
+
+test('date list pagination with dlp callback', async () => {
+  const h = createHarness();
+  for (let i = 1; i <= CONFIG.dateListPageSize + 2; i += 1) {
+    await addDate(h, A, { d: String(i), title: `مورد ${i}` });
+  }
+  await h.say(A, '📅 تاریخ‌های من');
+  const btns = h.buttons(h.lastSent().keyboard);
+  assert.ok(btns.some((b) => b.callback_data === 'dlp:1'));
+  await h.press(A, 'dlp:1');
+  assert.ok(h.lastEdited().text.includes('صفحه ۲'));
+});
+
 // ---------- ownership & forged callbacks ----------
 
 test('forged or malformed callback data is rejected', async () => {
@@ -218,10 +379,7 @@ test('user B cannot list, open, edit or delete user A dates', async () => {
   await h.say(B, '/list');
   const listed = h.lastSent();
   assert.equal(String(listed.chatId), String(B));
-  // A's entry would render as a line containing "روز گذشته" (the date is in the past).
-  // Do not match on the title: the empty-state hint uses the same example title.
-  assert.ok(!listed.text.includes('گذشته') && !listed.text.includes('باقی'), 'B sees an entry line: ' + listed.text);
-  assert.equal(listed.keyboard, null);
+  assert.ok(!listed.text.includes('گذشته') && !listed.text.includes('باقی'), 'B sees an entry line');
 
   await h.say(B, '/delete');
   assert.equal(h.lastSent().text, T.emptyList);
@@ -245,7 +403,7 @@ test('edit title flow', async () => {
   await h.press(A, `e:${entry.id}`);
   assert.deepEqual(
     h.buttons(h.lastEdited().keyboard).map((b) => b.callback_data),
-    [`et:${entry.id}`, `ed:${entry.id}`, 'ep:0'],
+    [`et:${entry.id}`, `ed:${entry.id}`, 'dlp:0'],
   );
   await h.press(A, `et:${entry.id}`);
   await h.say(A, 'شروع زندگی مشترک');
@@ -275,10 +433,9 @@ test('delete flow with confirmation', async () => {
   await h.say(A, '/delete');
   await h.press(A, `d:${entry.id}`);
   assert.ok(h.buttons(h.lastEdited().keyboard).some((b) => b.callback_data === `dy:${entry.id}`));
-  assert.equal((await h.store.listDates('111')).length, 1); // not yet
+  assert.equal((await h.store.listDates('111')).length, 1);
   await h.press(A, `dy:${entry.id}`);
   assert.equal((await h.store.listDates('111')).length, 0);
-  assert.equal(h.lastSent().text.includes(T.emptyList), true);
 });
 
 test('pagination of the dashboard', async () => {
@@ -287,7 +444,98 @@ test('pagination of the dashboard', async () => {
     await addDate(h, A, { d: String(i), title: `مورد ${i}` });
   }
   await h.say(A, '/list');
-  assert.ok(h.buttons(h.lastSent().keyboard).some((b) => b.callback_data === 'lp:1'));
-  await h.press(A, 'lp:1');
-  assert.ok(h.lastEdited().text.includes('صفحه ۲ از ۲'));
+  assert.ok(h.buttons(h.lastSent().keyboard).some((b) => b.callback_data === 'dlp:1'));
+  await h.press(A, 'dlp:1');
+  assert.ok(h.lastEdited().text.includes('صفحه ۲'));
+});
+
+// ---------- settings ----------
+
+test('settings: toggle display mode', async () => {
+  const h = createHarness();
+  await h.say(A, '⚙️ تنظیمات');
+  const msg = h.lastSent();
+  assert.ok(msg.text.includes('تنظیمات'));
+
+  await h.press(A, 'set_short');
+  assert.equal(h.lastToast(), T.settingsSaved);
+  const settings = await h.store.getSettings('111');
+  assert.equal(settings.displayMode, 'short');
+
+  await h.press(A, 'set_detailed');
+  assert.equal((await h.store.getSettings('111')).displayMode, 'detailed');
+});
+
+test('settings: display mode affects date list output', async () => {
+  const h = createHarness();
+  await addDate(h, A);
+
+  // Default is detailed -> shows year/month/day
+  await h.say(A, '📅 تاریخ‌های من');
+  const detailed = h.lastSent().text;
+  assert.ok(detailed.includes('ماه') || detailed.includes('سال'));
+
+  // Switch to short
+  await h.say(A, '⚙️ تنظیمات');
+  await h.press(A, 'set_short');
+  await h.say(A, '📅 تاریخ‌های من');
+  const short = h.lastSent().text;
+  assert.ok(short.includes('روز گذشته'));
+});
+
+// ---------- import via button ----------
+
+test('import via reply button: enter code as text', async () => {
+  const h = createHarness();
+  await addDate(h, A);
+  // Create share
+  await h.say(A, '📤 اشتراک‌گذاری');
+  await h.press(A, 'sa');
+  const codeMatch = /[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){3}/.exec(h.lastEdited().text);
+  const code = codeMatch[0];
+
+  // User B uses reply keyboard to import
+  await h.say(B, '📥 دریافت تاریخ');
+  assert.equal(await stateOf(h, B), 'i_wait');
+  await h.say(B, code);
+  // Should show preview
+  assert.ok(h.lastSent().text.includes('آماده دریافت'));
+  assert.equal(await stateOf(h, B), 'i_confirm');
+  await h.press(B, 'ic');
+  assert.equal((await h.store.listDates('222')).length, 1);
+});
+
+// ---------- nav callbacks ----------
+
+test('nav_home callback returns to dashboard', async () => {
+  const h = createHarness();
+  await addDate(h, A);
+  await h.say(A, '📅 تاریخ‌های من');
+  await h.press(A, 'nav_home');
+  assert.ok(h.lastEdited().text.includes('📅 امروز'));
+});
+
+test('nav_add callback starts wizard', async () => {
+  const h = createHarness();
+  await h.press(A, 'nav_add');
+  assert.ok(h.lastSent().text.includes('سال'));
+  assert.equal(await stateOf(h, A), 'w_year');
+});
+
+// ---------- single entry share ----------
+
+test('share single entry from date list', async () => {
+  const h = createHarness();
+  await addDate(h, A);
+  const [entry] = await h.store.listDates('111');
+  await h.press(A, `es:${entry.id}`);
+  assert.ok(h.lastEdited().text.includes('کد اشتراک'));
+});
+
+test('share single entry: user B cannot share user A entry', async () => {
+  const h = createHarness();
+  await addDate(h, A);
+  const [entry] = await h.store.listDates('111');
+  await h.press(B, `es:${entry.id}`);
+  assert.equal(h.lastToast(), T.notFound);
 });

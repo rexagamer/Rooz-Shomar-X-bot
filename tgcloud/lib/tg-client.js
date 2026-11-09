@@ -1,14 +1,20 @@
 import { api } from 'sdk';
 
-const withMarkup = (base, keyboard) =>
-  keyboard && keyboard.length ? { ...base, reply_markup: { inline_keyboard: keyboard } } : base;
+const withMarkup = (base, keyboard, replyKeyboard) => {
+  const result = { ...base };
+  if (keyboard && keyboard.length) {
+    result.reply_markup = { inline_keyboard: keyboard };
+  } else if (replyKeyboard) {
+    result.reply_markup = replyKeyboard;
+  }
+  return result;
+};
 
 export function createTelegramClient() {
   return {
-    send: (chatId, text, keyboard) =>
-      api.sendMessage(withMarkup({ chat_id: chatId, text, parse_mode: 'HTML' }, keyboard)),
+    send: (chatId, text, keyboard, replyKeyboard) =>
+      api.sendMessage(withMarkup({ chat_id: chatId, text, parse_mode: 'HTML' }, keyboard, replyKeyboard)),
 
-    // Omitting reply_markup on edit removes the old buttons.
     async edit(chatId, messageId, text, keyboard) {
       try {
         await api.editMessageText(

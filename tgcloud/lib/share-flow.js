@@ -6,7 +6,8 @@ import {
 } from './sharing-service.js';
 import { T, formatImportPreview, formatMyShares } from './formatters.js';
 import {
-  shareMenuKeyboard, shareSelectKeyboard, mySharesKeyboard, revokeConfirmKeyboard, confirmKeyboard,
+  shareMenuKeyboard, shareSelectKeyboard, mySharesKeyboard, revokeConfirmKeyboard,
+  shareCreatedKeyboard, importConfirmKeyboard,
 } from './keyboards.js';
 import { render, send, showDashboard, todayOf } from './screens.js';
 
@@ -38,7 +39,7 @@ async function selectState(c) {
 export async function toggleSelect(c, id) {
   const p = await selectState(c);
   if (!p) return T.expired;
-  if (!(await getEntry(c.deps.store, c.userId, id))) return T.notFound; // must be the caller's own
+  if (!(await getEntry(c.deps.store, c.userId, id))) return T.notFound;
   const set = new Set(p.selected);
   if (set.has(id)) set.delete(id);
   else if (set.size < CONFIG.maxDatesPerUser) set.add(id);
@@ -65,6 +66,13 @@ export async function finishSelect(c) {
 
 export const shareAll = (c) => createAndShow(c, null);
 
+/** Share a single entry by ID (from the date list's share button) */
+export async function shareSingle(c, id) {
+  const entry = await getEntry(c.deps.store, c.userId, id);
+  if (!entry) return T.notFound;
+  return createAndShow(c, [id]);
+}
+
 async function createAndShow(c, entryIds) {
   const { store, now } = c.deps;
   const r = await createShare(store, c.userId, entryIds, now);
@@ -76,24 +84,37 @@ async function createAndShow(c, entryIds) {
     await render(c, c.messageId, text);
     return undefined;
   }
-  await render(c, c.messageId, T.shareCreated(r.code, r.share.dateCount));
+  await render(c, c.messageId, T.shareCreated(r.code, r.share.dateCount), shareCreatedKeyboard());
   return undefined;
 }
 
 // ---------- import ----------
 
 export async function startImport(c, args) {
-  if (!args) return send(c, T.importUsage);
+  if (!args) {
+    // Button-first: set state to wait for code text
+    await setState(c.deps.store, c.userId, 'i_wait', {}, c.deps.now);
+    return send(c, T.importPrompt);
+  }
+  return doImportPreview(c, args);
+}
+
+export async function handleImportText(c, text) {
+  return doImportPreview(c, text);
+}
+
+async function doImportPreview(c, input) {
   const { store, now } = c.deps;
-  const r = await previewImport(store, c.userId, args, now);
+  const r = await previewImport(store, c.userId, input, now);
   if (!r.ok) {
     const text = r.reason === 'malformed' ? T.importMalformed
       : r.reason === 'rate_limited' ? T.importRateLimited(r.retryAfterMs)
         : T.importNotFound;
+    await clearState(store, c.userId);
     return send(c, text);
   }
   await setState(store, c.userId, 'i_confirm', { shareId: r.share.id }, now);
-  return send(c, formatImportPreview(r.items), confirmKeyboard('ic', 'ix', '✅ اضافه کن', '❌ انصراف'));
+  return send(c, formatImportPreview(r.items), importConfirmKeyboard());
 }
 
 export async function confirmImport(c) {

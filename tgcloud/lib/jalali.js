@@ -184,6 +184,130 @@ export function getDayDifference(dateA, dateB) {
   return gregorianToDayNumber(b.year, b.month, b.day) - gregorianToDayNumber(a.year, a.month, a.day);
 }
 
+// ---------- calendar-aware duration ----------
+
+/**
+ * Clamp a day to the valid range for the given Jalali year/month.
+ * E.g. day 31 in month 7 (which has 30 days) -> 30.
+ */
+function clampDay(year, month, day) {
+  const max = getDaysInJalaliMonth(year, month);
+  return day > max ? max : day;
+}
+
+/**
+ * Calendar-aware Jalali duration between two Jalali dates.
+ * Always returns non-negative years, months, days.
+ *
+ * Rule: we advance from the earlier date toward the later date by
+ * whole years, then whole months, then remaining days.
+ * When adding a year or month would produce an invalid day (e.g. 31st
+ * in a 30-day month), we clamp to the last valid day of the target month.
+ *
+ * @param {{year,month,day}} fromJ  Jalali date (the earlier or later)
+ * @param {{year,month,day}} toJ    Jalali date
+ * @returns {{ years:number, months:number, days:number, totalDays:number, past:boolean }}
+ *   `past` is true when `from` is chronologically before `to` (the event is in the past).
+ */
+export function getJalaliDuration(fromJ, toJ) {
+  const fromDN = jalaliToDayNumber(fromJ.year, fromJ.month, fromJ.day);
+  const toDN = jalaliToDayNumber(toJ.year, toJ.month, toJ.day);
+  const totalDays = Math.abs(toDN - fromDN);
+
+  if (totalDays === 0) {
+    return { years: 0, months: 0, days: 0, totalDays: 0, past: false };
+  }
+
+  // Ensure start <= end for the calculation
+  let start, end;
+  let past;
+  if (fromDN <= toDN) {
+    start = { ...fromJ };
+    end = { ...toJ };
+    past = true; // from is before to, i.e. the event date is in the past relative to "to"
+  } else {
+    start = { ...toJ };
+    end = { ...fromJ };
+    past = false; // from is after to, i.e. the event is in the future
+  }
+
+  // Step 1: count full years
+  let years = 0;
+  {
+    let testYear = start.year + 1;
+    let testMonth = start.month;
+    let testDay = clampDay(testYear, testMonth, start.day);
+    while (true) {
+      const dn = jalaliToDayNumber(testYear, testMonth, testDay);
+      if (dn > jalaliToDayNumber(end.year, end.month, end.day)) break;
+      years += 1;
+      testYear += 1;
+      testDay = clampDay(testYear, testMonth, start.day);
+    }
+  }
+
+  // Advance the cursor by `years` years from start
+  let curYear = start.year + years;
+  let curMonth = start.month;
+  let curDay = clampDay(curYear, curMonth, start.day);
+
+  // Step 2: count full months
+  let months = 0;
+  {
+    while (true) {
+      let nextMonth = curMonth + 1;
+      let nextYear = curYear;
+      if (nextMonth > 12) { nextMonth = 1; nextYear += 1; }
+      const nextDay = clampDay(nextYear, nextMonth, start.day);
+      const dn = jalaliToDayNumber(nextYear, nextMonth, nextDay);
+      if (dn > jalaliToDayNumber(end.year, end.month, end.day)) break;
+      months += 1;
+      curYear = nextYear;
+      curMonth = nextMonth;
+      curDay = nextDay;
+    }
+  }
+
+  // Step 3: remaining days
+  const curDN = jalaliToDayNumber(curYear, curMonth, curDay);
+  const endDN = jalaliToDayNumber(end.year, end.month, end.day);
+  const days = endDN - curDN;
+
+  return { years, months, days, totalDays, past };
+}
+
+/**
+ * Format a Jalali duration as a human-readable Persian string.
+ * @param {{ years:number, months:number, days:number, totalDays:number, past:boolean }} duration
+ * @param {'past'|'future'|'auto'} direction — 'auto' uses duration.past
+ * @param {{ showTotal?: boolean }} options
+ * @returns {string}
+ */
+export function formatJalaliDuration(duration, direction = 'auto', { showTotal = false } = {}) {
+  const { years, months, days, totalDays, past } = duration;
+
+  if (totalDays === 0) return 'امروز این تاریخه! 🎉';
+
+  const dir = direction === 'auto' ? (past ? 'past' : 'future') : direction;
+  const suffix = dir === 'past' ? 'گذشته' : 'باقی‌مونده';
+
+  const parts = [];
+  if (years > 0) parts.push(`${toPersianDigits(years)} سال`);
+  if (months > 0) parts.push(`${toPersianDigits(months)} ماه`);
+  if (days > 0) parts.push(`${toPersianDigits(days)} روز`);
+
+  // Edge case: if parts is empty but totalDays > 0, use totalDays
+  if (parts.length === 0) parts.push(`${toPersianDigits(totalDays)} روز`);
+
+  let result = parts.join(' و ') + ' ' + suffix;
+
+  if (showTotal && totalDays > 0 && (years > 0 || months > 0)) {
+    result += ` (${toPersianDigits(totalDays)} روز)`;
+  }
+
+  return result;
+}
+
 // ---------- formatting ----------
 
 export function formatJalaliDate(year, month, day) {

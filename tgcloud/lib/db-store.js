@@ -1,10 +1,6 @@
-// UNVERIFIED against docs/tgcloud-sdk.md: written in the Drizzle-like style that
-// AGENTS.md hints at. This is the ONLY file (besides schema.js) that touches `db`.
-// If the query API differs, fix it here; the store contract below is what the
-// services and tests rely on. Every call is awaited.
 import { db } from 'sdk';
 import { and, eq } from 'sdk/db';
-import { dates, userStates, shareCodes, shareImports, importAttempts } from '../schema.js';
+import { dates, userStates, shareCodes, shareImports, importAttempts, userSettings } from '../schema.js';
 
 const first = async (query) => (await query.get()) ?? null;
 
@@ -71,6 +67,15 @@ export function createDbStore() {
     async saveAttempts(row) {
       await db.delete(importAttempts).where(eq(importAttempts.userId, row.userId)).run();
       await db.insert(importAttempts).values(row).run();
+    },
+
+    // ----- user settings -----
+    async getSettings(userId) {
+      return first(db.select().from(userSettings).where(eq(userSettings.userId, userId)));
+    },
+    async saveSettings(row) {
+      await db.delete(userSettings).where(eq(userSettings.userId, row.userId)).run();
+      await db.insert(userSettings).values(row).run();
     },
   };
 }

@@ -47,3 +47,10 @@ export const importAttempts = table('import_attempts', {
   windowStart: integer('window_start').notNull(),
   failures: integer('failures').notNull(),
 });
+
+export const userSettings = table('user_settings', {
+  userId: text('user_id').primaryKey(),
+  displayMode: text('display_mode').notNull(), // 'detailed' | 'short'
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
