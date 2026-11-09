@@ -152,3 +152,28 @@ The platform manages the bot's webhook for you, derived from your deployed
 `handlers/*`, and refreshes it on `push`. If it ever drifts — e.g. someone called
 `setWebhook` with the raw bot token — `npx tgcloud webhook` shows the mismatch and
 `npx tgcloud webhook sync` repairs it.
+
+
+
+## RoozShomarX — project-specific notes
+
+Persian Jalali date tracker bot (private chats only). No Mini App, no endpoints.
+
+- **Layering:** `handlers/*.js` are thin: they call `createDeps()` (lib/runtime.js) and then
+  `handleMessage` / `handleCallbackQuery` (lib/router.js). Business logic lives in `lib/*-service.js`.
+- **Only three modules may import `sdk`:** `schema.js`, `lib/db-store.js`, `lib/tg-client.js`
+  (enforced by tests/static.test.js). Everything else takes `deps = { store, tg, now }`, so tests
+  run against `tests/helpers/memory-store.js`. Keep the memory store's contract identical to db-store.js.
+- **State machine:** persisted in `user_states`. `w_year|w_month|w_day|w_title|w_confirm` (wizard,
+  payload.kind = add | edit_date | edit_title), `s_select` (share selection), `i_confirm` (import).
+  Callback buttons check the state, so stale or forged buttons are rejected. TTL: CONFIG.stateTtlMs.
+- **Callback data** is validated by `parseCallback` (keyboards.js): ≤64 bytes, action + page number or
+  10-char id. Add new actions to the right set there. Callbacks must come from the user's own private chat.
+- **Ownership:** every date/share query takes the owner id. Never fetch by id alone.
+- **Share codes:** 80-bit, SHA-256 hashed at rest (plaintext never stored or logged). Revoked and unknown
+  codes return the same error on purpose. Failed imports are rate limited (CONFIG.import*).
+- **Schema:** no FKs, no unique/index declarations yet (DSL unverified). Dedup is app-level: normalized
+  title + Gregorian date. After editing schema.js: `npx tgcloud push` then `npx tgcloud migrate`.
+- **Jalali:** 33-year arithmetic rule, supported years 1300–1500 (jalali.js). Dates are date-only,
+  Asia/Tehran via CONFIG.timeZone.
+- **Tests:** `npm test` (node --test, no deps). Telegram HTML parse mode: escape user text with `escapeHtml`.
